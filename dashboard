@@ -1,0 +1,199 @@
+import requests
+import json
+import time
+import threading 
+import cv2
+import numpy as np
+import google.generativeai as genai
+from PIL import Image
+from flask import Flask, request, jsonify, Response 
+from flask_cors import CORS
+
+# =================================================================
+#            *** GLOBAL CONFIGURATION & SHARED DATA ***
+# =================================================================
+
+# --- 1. AI & Camera Config ---
+GEMINI_API_KEY = "AIzaSyCMWg3xMqaP-hzpkLN3_ZnhKuKy-qVJEdc"
+ESP32_STREAM_URL = "http://10.101.194.173:81/stream" 
+genai.configure(api_key=GEMINI_API_KEY)
+ai_model = genai.GenerativeModel('gemini-2.0-flash')
+
+# --- 2. Tinkercode API Configuration ---
+TINKERCODE_TOKEN = "1fdf1fd01e73415b99cb1b25b7e75278"
+OPENCAGE_API_KEY = "c504d9fa3c2d4d7fb70fa6e49d0b6ec2"
+OPENCAGE_BASE_URL = "https://api.opencagedata.com/geocode/v1/json"
+
+# Base URLs
+TINKER_GET_BASE = f"https://tinkercode.my:8443/tinkeriot/get?token={TINKERCODE_TOKEN}"
+TINKER_SET_BASE = f"https://tinkercode.my:8443/tinkeriot/set?token={TINKERCODE_TOKEN}"
+
+# --- 3. Telegram Settings ---
+TELEGRAM_BOT_TOKEN = "8470425205:AAHyl_XQSnX09NVialJrqa_SCZsu1Yj2_6g"
+TELEGRAM_CHAT_ID = "674020547" 
+TELEGRAM_API_BASE = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+
+# Global State
+current_frame = None
+global_sensor_data = {"temp": 0.0, "smoke": 0.0, "humid": 0.0, "thresh": 57.0, "ai_msg": "Initializing..."}
+global_fire_lat = None
+global_fire_lon = None
+is_buzzer_muted = False # Tracked locally from Dashboard toggle
+
+# =================================================================
+#                     *** UTILITY FUNCTIONS ***
+# =================================================================
+
+def geocode_address(address_text):
+    print(f"\n--- 📍 Geocoding Address: {address_text} ---", flush=True)
+    params = {'q': address_text, 'key': OPENCAGE_API_KEY, 'language': 'en', 'pretty': 1}
+    try:
+        response = requests.get(OPENCAGE_BASE_URL, params=params)
+        data = response.json()
+        if data and data['results']:
+            lat = data['results'][0]['geometry']['lat']
+            lon = data['results'][0]['geometry']['lng']
+            print(f"✅ Coordinates Found: {lat}, {lon}", flush=True)
+            return lat, lon
+        return None, None
+    except Exception as e:
+        print(f"❌ Geocoding Error: {e}", flush=True)
+        return None, None
+
+def send_notification(message):
+    payload = {'chat_id': TELEGRAM_CHAT_ID, 'text': message, 'parse_mode': 'Markdown'}
+    try:
+        requests.post(TELEGRAM_API_BASE, data=payload, timeout=10)
+        print(f"📢 Telegram Alert Sent!", flush=True)
+    except:
+        print(f"❌ Telegram Connection Failed.", flush=True)
+
+# =================================================================
+#                 *** BACKGROUND THREADS ***
+# =================================================================
+
+def stream_fetcher():
+    global current_frame
+    while True:
+        cap = cv2.VideoCapture(ESP32_STREAM_URL)
+        while True:
+            ret, frame = cap.read()
+            if not ret: break
+            current_frame = frame
+        cap.release()
+        time.sleep(2)
+
+def monitor_logic():
+    global global_sensor_data, global_fire_lat, current_frame, is_buzzer_muted
+    last_ai_check = 0
+    SAFETY_LIMIT = 57.0 
+    last_ai_result = "INITIALIZING..." # Persistence variable added
+    
+    print(f"🚀 MONITORING STARTED: AI Active | Thermal Trigger: {SAFETY_LIMIT}°C.", flush=True)
+    
+    while True:
+        if global_fire_lat is None:
+            time.sleep(2)
+            continue
+
+        try:
+            # 1. FETCH SENSOR DATA
+            def fetch_val(channel):
+                url = f"{TINKER_GET_BASE}&{channel}"
+                resp = requests.get(url).json()
+                return float(resp.get('value', resp.get(channel, 0)))
+
+            temp = fetch_val('C1')
+            smoke = fetch_val('C2')
+            humid = fetch_val('C4')
+
+            global_sensor_data.update({
+                "temp": temp, "smoke": smoke, "humid": humid, "thresh": SAFETY_LIMIT 
+            })
+            
+            print(f"[Monitor] Temp: {temp}°C | Smoke: {smoke} PPM | AI State: {last_ai_result}", flush=True)
+
+            # 2. AI VISUAL CATEGORIZATION (Every 30s)
+            if time.time() - last_ai_check > 30 and current_frame is not None:
+                last_ai_check = time.time()
+                rgb_frame = cv2.cvtColor(current_frame, cv2.COLOR_BGR2RGB)
+                pil_img = Image.fromarray(rgb_frame)
+
+                prompt = "Analyze this image. Classify into exactly one: 'NO FIRE', 'LIGHTER FIRE', 'COOKING FIRE', or 'REAL FIRE'. Return ONLY the category name."
+
+                response = ai_model.generate_content([prompt, pil_img])
+                last_ai_result = response.text.strip().upper()
+                
+                print(f"🤖 AI UPDATED: {last_ai_result}", flush=True)
+                global_sensor_data["ai_msg"] = last_ai_result
+            
+            # 3. NOTIFICATION LOGIC
+            if "REAL FIRE" in last_ai_result:
+                send_notification(f"🚨 *URGENCY:* REAL FIRE detected! \nTemp: {temp}°C")
+            
+            elif "COOKING FIRE" in last_ai_result or "LIGHTER FIRE" in last_ai_result:
+                if temp >= SAFETY_LIMIT:
+                    type_str = "COOKING" if "COOKING" in last_ai_result else "LIGHTER"
+                    send_notification(f"🔥 *NOTICE:* {type_str} FIRE with High Heat! \nTemp: {temp}°C")
+
+            elif temp >= SAFETY_LIMIT and "NO FIRE" in last_ai_result:
+                send_notification(f"⚠️ *CRITICAL:* High Heat ({temp}°C) but AI sees NO fire.")
+
+            # 4. PHYSICAL BUZZER LOGIC
+            if temp >= SAFETY_LIMIT:
+                if not is_buzzer_muted:
+                    requests.get(f"{TINKER_SET_BASE}&C0=1")
+                else:
+                    requests.get(f"{TINKER_SET_BASE}&C0=0")
+            else:
+                requests.get(f"{TINKER_SET_BASE}&C0=0")
+
+        except Exception as e:
+            print(f"Monitor Loop Error: {e}", flush=True)
+        
+        time.sleep(10)
+
+# =================================================================
+#                        *** FLASK ROUTES ***
+# =================================================================
+
+app = Flask(__name__)
+CORS(app)
+
+@app.route('/toggle_buzzer', methods=['POST'])
+def toggle_buzzer():
+    global is_buzzer_muted
+    data = request.get_json()
+    is_buzzer_muted = data.get('mute', False)
+    print(f"🎛️ Dashboard: Buzzer {'MUTED' if is_buzzer_muted else 'ACTIVE'}", flush=True)
+    return jsonify({"status": "success"})
+
+@app.route('/video_feed')
+def video_feed():
+    def generate():
+        while True:
+            if current_frame is not None:
+                _, buffer = cv2.imencode('.jpg', current_frame)
+                yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+            time.sleep(0.04)
+    return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/status')
+def status():
+    return jsonify(global_sensor_data)
+
+@app.route('/update_address', methods=['POST'])
+def update_address():
+    global global_fire_lat, global_fire_lon
+    data = request.get_json()
+    addr = data.get('address')
+    lat, lon = geocode_address(addr)
+    if lat:
+        global_fire_lat, global_fire_lon = lat, lon
+        return jsonify({"status": "success", "message": "Location updated!"})
+    return jsonify({"status": "error", "message": "Geocoding failed."}), 500
+
+if __name__ == "__main__":
+    threading.Thread(target=stream_fetcher, daemon=True).start()
+    threading.Thread(target=monitor_logic, daemon=True).start()
+    app.run(host='0.0.0.0', port=8888, debug=False)
