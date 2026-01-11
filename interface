@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🔥 Fire Alarm Monitor Dashboard (Final Version)</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.1/dist/chart.min.js"></script>
+
+    <style>
+        :root {
+            --primary-red: #d32f2f;
+            --dark-bg: #121212;
+            --card-bg: #1e1e1e;
+            --text-main: #ffffff;
+            --accent-orange: #ffa000;
+            --safe-green: #388e3c;
+            --border-radius: 12px;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, sans-serif;
+            margin: 0; background-color: var(--dark-bg); color: var(--text-main);
+        }
+
+        .container { padding: 20px; max-width: 1600px; margin: 0 auto; }
+
+        /* Header & Status */
+        .header {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 15px 25px; background: #8b0000; border-radius: var(--border-radius);
+            margin-bottom: 20px; border-bottom: 4px solid var(--primary-red);
+        }
+
+        .status-badge { display: flex; align-items: center; background: rgba(0,0,0,0.5); padding: 5px 15px; border-radius: 20px; }
+        .status-light { width: 12px; height: 12px; border-radius: 50%; margin-right: 10px; background-color: var(--safe-green); }
+
+        /* --- LAYOUT GRID --- */
+        .top-section {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .left-panel { flex: 2.5; display: flex; flex-direction: column; gap: 20px; }
+        .right-panel { flex: 1.2; display: flex; flex-direction: column; gap: 15px; }
+
+        .bottom-section {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 20px;
+            width: 100%;
+        }
+
+        .monitoring-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; }
+        .card {
+            background-color: var(--card-bg); padding: 20px; border-radius: var(--border-radius);
+            text-align: center; border-bottom: 4px solid var(--primary-red);
+        }
+        .large-value { font-size: 2.5em; font-weight: bold; margin: 5px 0; }
+        
+       /* --- UPDATED VIDEO MONITOR SECTION --- */
+        .video-container { 
+            background: #000; 
+            border-radius: 20px;       /* Smooth rounded edges */
+            overflow: hidden; 
+            border: 2px solid #333; 
+            width: 97%;             
+            height: 600px;             /* INCREASED: Makes it "Longer" vertically */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .video-feed { 
+            width: 100%;             
+            height: 100%;              /* Stretches to fill the "Longer" container */
+            object-fit: cover;         /* Fills the whole box perfectly without gaps */
+            display: block; 
+            border-radius: 15px;
+        }
+
+        .section {
+            background-color: var(--card-bg);
+            padding: 15px;
+            border-radius: var(--border-radius);
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
+        }
+        
+        .section h3 { margin-top: 0; color: var(--accent-orange); font-size: 0.9em; border-bottom: 1px solid #333; padding-bottom: 5px; }
+
+        /* --- Charts Styles --- */
+        .chart-container {
+            height: 250px;
+            padding: 10px;
+            background-color: #ffffff;
+            border-radius: 8px;
+            box-shadow: inset 0 0 10px rgba(0,0,0,0.05);
+            border-width: 3px; 
+            border-style: solid;
+        }
+
+        .chart-frame-red { border-color: #d32f2f; }
+        .chart-frame-blue { border-color: #1976d2; }
+        .chart-frame-yellow { border-color: #ffa000; }
+
+        .input-group { margin-bottom: 10px; }
+        .input-group label { display: block; font-size: 0.9em; margin-bottom: 3px; }
+        .input-group input[type="text"] { width: 100%; padding: 8px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; background: white; color: black; }
+
+        .submit-button { background-color: var(--primary-red); color: white; padding: 10px 15px; border: none; border-radius: 4px; cursor: pointer; transition: background-color 0.3s; width: 100%; }
+        .submit-button:hover { background-color: #a02020; }
+
+        /* --- TOGGLE SWITCH STYLES --- */
+        .toggle-switch-wrapper { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; }
+        .switch { position: relative; display: inline-block; width: 60px; height: 34px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider {
+            position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+            background-color: #ccc; transition: .4s; border-radius: 34px;
+        }
+        .slider:before {
+            position: absolute; content: ""; height: 26px; width: 26px; left: 4px; bottom: 4px;
+            background-color: white; transition: .4s; border-radius: 50%;
+        }
+        input:checked + .slider { background-color: var(--primary-red); }
+        input:checked + .slider:before { transform: translateX(26px); }
+
+        @media (max-width: 768px) {
+            .top-section, .bottom-section { flex-direction: column; grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        
+        <div class="header">
+            <h1>Fire Alarm 🚨 Dashboard</h1>
+            <div class="status">
+                <span class="status-light" id="connection-status-light"></span>
+                <span class="status-text" id="connection-status-text">System Status: Loading...</span>
+            </div>
+        </div>
+
+        <div class="top-section">
+            <div class="left-panel">
+                <div class="monitoring-grid">
+                    <div class="card" id="temp-card">
+                        <h3>🌡️ Temp</h3>
+                        <p class="large-value" id="temp-value">--.-</p>
+                        <p class="unit">°C</p>
+                    </div>
+                    <div class="card" id="humidity-card">
+                        <h3>💧 Humid</h3>
+                        <p class="large-value" id="humidity-value">--</p>
+                        <p class="unit">% RH</p>
+                    </div>
+                    <div class="card" id="smoke-card">
+                        <h3>💨 Smoke</h3>
+                        <p class="large-value" id="smoke-value">---</p>
+                        <p class="unit">PPM</p>
+                    </div>
+                </div>
+
+                <div class="section video-container">
+                    <h3>👁️ Live Camera Feed (ESP32-CAM)</h3>
+                    <img class="video-feed" id="video-stream" src="http://127.0.0.1:8888/video_feed" alt="Live Camera Feed Placeholder">
+                </div>
+            </div>
+            
+            <div class="right-panel">
+                <div class="section">
+                    <h3>🏠 Address Configuration</h3>
+                    <div class="input-group">
+                        <label for="user-address-input">Your Home Address:</label>
+                        <input type="text" id="user-address-input" placeholder="e.g., Taman Universiti">
+                    </div>
+                    <button class="submit-button" onclick="sendAddressToServer()">Update Address & Geocode</button>
+                    <p id="address-status" style="font-size: 0.8em; color: var(--safe-green); margin-top: 5px;">Status: Awaiting address input.</p>
+                </div>
+
+                <div class="section" style="flex-grow: 1;">
+                    <h3>📜 Notification & Event Log</h3>
+                    <div id="notification-log-container" style="height: 300px; overflow-y: auto; background: #f9f9f9; padding: 10px; border-radius: 4px; font-size: 0.9em; color: #333;">
+                        <ul id="notification-list" style="list-style-type: none; padding: 0; margin: 0;"></ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="bottom-section">
+            <div class="section chart-container-wrapper">
+                <label style="font-size: 0.8em; color: #d32f2f; font-weight: bold;">Temperature Trend:</label>
+                <div class="chart-container chart-frame-red">
+                    <canvas id="temp-chart-canvas"></canvas>
+                </div>
+            </div>
+            <div class="section chart-container-wrapper">
+                <label style="font-size: 0.8em; color: #1976d2; font-weight: bold;">Humidity Trend:</label>
+                <div class="chart-container chart-frame-blue">
+                    <canvas id="humidity-chart-canvas"></canvas>
+                </div>
+            </div>
+            <div class="section chart-container-wrapper">
+                <label style="font-size: 0.8em; color: #ffa000; font-weight: bold;">Smoke Trend:</label>
+                <div class="chart-container chart-frame-yellow">
+                    <canvas id="smoke-chart-canvas"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // CONFIGURATION
+        const EMERGENCY_TEMP = 57.0; 
+        const HISTORY_LENGTH = 15;
+        const FIXED_THRESHOLD = 45.0; 
+
+        const API_TOKEN = "1fdf1fd01e73415b99cb1b25b7e75278";
+        const BASE_API_URL = "https://tinkercode.my:8443/tinkeriot/";
+        const PYTHON_URL = "http://127.0.0.1:8888"; // Python Flask URL
+        
+        const TEMP_API_URL = BASE_API_URL + "get?token=" + API_TOKEN + "&C1";
+        const SMOKE_API_URL = BASE_API_URL + "get?token=" + API_TOKEN + "&C2"; 
+        const HUMIDITY_API_URL = BASE_API_URL + "get?token=" + API_TOKEN + "&C4"; 
+        const THRESH_API_URL = BASE_API_URL + "get?token=" + API_TOKEN + "&C3"; 
+
+        const POLLING_INTERVAL = 5000;
+
+        // DOM Elements
+        const tempCard = document.getElementById('temp-card');
+        const statusLight = document.getElementById('connection-status-light');
+        const statusText = document.getElementById('connection-status-text');
+        const userAddressInput = document.getElementById('user-address-input');
+        const addressStatus = document.getElementById('address-status');
+
+        let tempChart, humidityChart, smokeChart;
+        let chartLabels = [];
+        let tempHistory = [];
+        let humidityHistory = [];
+        let smokeHistory = [];
+        let currentAlarmState = "SAFE";
+
+        // ADDED TOGGLE BUZZER FUNCTION
+        async function toggleBuzzerMute() {
+            const isMuted = document.getElementById('buzzer-mute-toggle').checked;
+            try {
+                const response = await fetch(`${PYTHON_URL}/toggle_buzzer`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mute: isMuted })
+                });
+                if (response.ok) {
+                    addLogEntry('INFO', isMuted ? "Buzzer Muted manually." : "Buzzer set to Automatic.");
+                }
+            } catch (e) {
+                console.error("Local API Error:", e);
+                addLogEntry('WARNING', "Failed to connect to Python for Buzzer control.");
+            }
+        }
+
+        async function sendAddressToServer() {
+            const address = userAddressInput.value.trim();
+            if (address.length < 5) {
+                addressStatus.textContent = "Status: Address is too short.";
+                addressStatus.style.color = 'var(--primary-red)';
+                return;
+            }
+            addressStatus.textContent = `Status: Sending address...`;
+            try {
+                const response = await fetch(`${PYTHON_URL}/update_address`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ address: address })
+                });
+                const result = await response.json();
+                if (response.ok) {
+                    addressStatus.textContent = `✅ Status: ${result.message}`;
+                    addressStatus.style.color = 'var(--safe-green)';
+                    addLogEntry('INFO', `Address updated: ${address}`);
+                }
+            } catch (error) {
+                addressStatus.textContent = `❌ Status: Python Server connection failed.`;
+            }
+        }
+
+        function initializeCharts() {
+            const options = { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: false } } };
+            tempChart = new Chart(document.getElementById('temp-chart-canvas'), {
+                type: 'line', data: {labels: chartLabels, datasets: [{ label: 'Temp (°C)', data: tempHistory, borderColor: '#d32f2f', tension: 0.2 }]}, options
+            });
+            humidityChart = new Chart(document.getElementById('humidity-chart-canvas'), {
+                type: 'line', data: {labels: chartLabels, datasets: [{ label: 'Humid (%RH)', data: humidityHistory, borderColor: '#1976d2', tension: 0.2 }]}, options: { ...options, scales: { y: { beginAtZero: true } } }
+            });
+            smokeChart = new Chart(document.getElementById('smoke-chart-canvas'), {
+                type: 'line', data: {labels: chartLabels, datasets: [{ label: 'Smoke (PPM)', data: smokeHistory, borderColor: '#ffa000', tension: 0.2, fill: false }]}, options: { ...options, scales: { y: { beginAtZero: true } } }
+            });
+        }
+        
+        async function fetchAllSensorData() {
+            try {
+                const [tr, sr, hr, thr] = await Promise.all([ fetch(TEMP_API_URL), fetch(SMOKE_API_URL), fetch(HUMIDITY_API_URL), fetch(THRESH_API_URL) ]);
+                const td = await tr.json();
+                const sd = await sr.json();
+                const hd = await hr.json();
+                const thd = await thr.json();
+
+                const t = parseFloat(td.value || td.C1 || 0);
+                const s = parseInt(sd.value || sd.C2 || 0);
+                const h = parseFloat(hd.value || hd.C4 || 0);
+                const th = parseFloat(thd.value || thd.C3 || FIXED_THRESHOLD);
+
+                updateChartsAndUI(t, s, h, th);
+                
+                document.getElementById('temp-value').textContent = t.toFixed(1);
+                document.getElementById('smoke-value').textContent = s;
+                document.getElementById('humidity-value').textContent = h.toFixed(0);
+                
+                statusLight.style.backgroundColor = 'var(--safe-green)';
+                statusText.textContent = "System Status: Data Active";
+            } catch (error) {
+                statusLight.style.backgroundColor = 'var(--primary-red)';
+                statusText.textContent = "System Status: API Error";
+            }
+        }
+
+        function updateChartsAndUI(t, s, h, th) {
+            const timestamp = new Date().toLocaleTimeString();
+            chartLabels.push(timestamp);
+            tempHistory.push(t); humidityHistory.push(h); smokeHistory.push(s);
+            if (chartLabels.length > HISTORY_LENGTH) { chartLabels.shift(); tempHistory.shift(); humidityHistory.shift(); smokeHistory.shift(); }
+            if (tempChart) { tempChart.update(); humidityChart.update(); smokeChart.update(); }
+            handleIncomingData(t, th);
+        }
+
+        function handleIncomingData(t, th) {
+            let newState = "SAFE";
+            if (t >= EMERGENCY_TEMP) newState = "EMERGENCY";
+            else if (t >= th) newState = "WARNING";
+
+            if (newState !== currentAlarmState && newState !== "SAFE") {
+                addLogEntry(newState, `Alert! Temp: ${t}°C (Threshold: ${th}°C)`);
+            }
+
+            tempCard.classList.remove('warning', 'emergency');
+            if (newState === "EMERGENCY") tempCard.style.borderBottomColor = "red";
+            else if (newState === "WARNING") tempCard.style.borderBottomColor = "orange";
+            else tempCard.style.borderBottomColor = "var(--primary-red)";
+
+            currentAlarmState = newState;
+        }
+
+        function addLogEntry(type, message) {
+            const list = document.getElementById('notification-list');
+            const entry = document.createElement('li');
+            const color = type === 'EMERGENCY' ? 'red' : (type === 'WARNING' ? 'orange' : 'green');
+            entry.innerHTML = `<span style="color:${color}; font-weight:bold;">[${type}]</span> (${new Date().toLocaleTimeString()}): ${message}`;
+            list.prepend(entry);
+        }
+
+        window.onload = function() {
+            initializeCharts();
+            setInterval(fetchAllSensorData, POLLING_INTERVAL);
+            fetchAllSensorData();
+        };
+    </script>
+</body>
+</html>
